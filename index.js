@@ -74,7 +74,7 @@ export default class extends Component {
 
     static defaultProps = {
         keyboardOffset: 40,
-        multilineInputStyle: { fontSize: 17 },
+        multilineInputStyle: null,
         useAnimatedScrollView: false,
         useKeyboardAvoidingView: false,
     };
@@ -117,6 +117,8 @@ export default class extends Component {
             contentBottomOffset,
         } = this.state;
 
+        const newChildren = this._cloneDeepComponents(children);
+
         const ScrollComponent = useAnimatedScrollView ? Animated.ScrollView : ScrollView;
         const ContainerComponent = useKeyboardAvoidingView ? KeyboardAvoidingView : View;
 
@@ -127,8 +129,10 @@ export default class extends Component {
                                      onMomentumScrollEnd={this._onMomentumScrollEnd}
                                      onFocusCapture={this._onFocus} {...otherProps}>
                         <View style={{ marginBottom: contentBottomOffset }}
-                              onStartShouldSetResponderCapture={isIOS ? this._onTouchStart : null}>
-                            {children}
+                              onStartShouldSetResponderCapture={isIOS ? this._onTouchStart : null}
+                              onResponderMove={this._onTouchMove}
+                              onResponderRelease={this._onTouchEnd}>
+                            {newChildren}
                             <View style={styles.hidden}
                                   pointerEvents="none">
                                 {
@@ -172,6 +176,58 @@ export default class extends Component {
         });
     }
 
+    _cloneDeepComponents(Component) {
+        if (isArray(Component)) {
+            return Component.map(subComponent => this._cloneDeepComponents(subComponent));
+        } else if (Component && Component.props && Component.props.children) {
+            const newComponent = { ...Component };
+            newComponent.props = { ...Component.props };
+            newComponent.props.children = this._cloneDeepComponents(Component.props.children);
+            return newComponent;
+        } else if (Component && Component.props && Component.props.multiline) {
+            const newComponent = { ...Component };
+            newComponent.props = { ...Component.props };
+            return this._addMultilineHandle(newComponent);
+        } else {
+            return Component;
+        }
+    }
+
+    _addMultilineHandle(Component) {
+        const onChange = Component.props.onChange;
+        const onSelectionChange = Component.props.onSelectionChange;
+        const onContentSizeChange = Component.props.onContentSizeChange;
+
+        Component.props.onChange = (event) => {
+            this._onChange(event);
+            onChange &&
+                onChange(event);
+        };
+
+        Component.props.onSelectionChange = ({ ...event }) => {
+            if (isIOS) {
+                // 确保处理代码在 onChange 之后执行
+                // release 版本必须使用 requestAnimationFrame
+                requestAnimationFrame(() => this._onSelectionChange(event));
+            } else {
+                setTimeout(() => this._onSelectionChange(event));
+            }
+            onSelectionChange &&
+                onSelectionChange(event);
+        };
+
+        // 使用防抖函数有两个目的
+        // - 确保 scrollToKeyboardRequest 在 onSelectionChange 之后执行
+        // - 短时间内不会重复执行 onContentSizeChange，因为当一次粘贴进许多行文本时，可能会连续触发多次 onContentSizeChange
+        Component.props.onContentSizeChange = debounce(({ ...event }) => {
+            this._onContentSizeChange(event);
+            onContentSizeChange &&
+                onContentSizeChange(event);
+        }, 2);
+
+        return Component;
+    }
+
     _getInputInfo(target) {
         return this._inputInfoMap[target] = this._inputInfoMap[target] || {};
     }
@@ -206,6 +262,7 @@ export default class extends Component {
         }
 
         setTimeout(() => {
+            this._root._innerViewRef &&
             this._root._innerViewRef.measureInWindow((x, y, width, height) => {
                 this._topOffset = y;
             });
@@ -316,7 +373,8 @@ export default class extends Component {
 
         if (multiline) {
             if (inputInfo.text === undefined) {
-                inputInfo.text = getProps(event._targetInst).value;
+                const props = getProps(event._targetInst);
+                inputInfo.text = props.value || props.defaultValue;
             }
 
             if (!isIOS) return;
@@ -333,11 +391,53 @@ export default class extends Component {
             if (isIOS) this._scrollToKeyboardRequest();
         }
     };
+
+    // onChange 在 onContentSizeChange 之前触发
+    // onChange 在 onSelectionChange 之后触发
+    _onChange = ({ ...event }) => {
+        const target = event.target || event.currentTarget;
+        const inputInfo = this._getInputInfo(target);
+        inputInfo.text = event.nativeEvent.text;
+    }
+
+    // onSelectionChange 在 keyboardDidShow 之前触发
+    // onSelectionChange 在 onContentSizeChange 之前触发
+    // onSelectionChange 在 onFocus 之后触发
+    _onSelectionChange = ({ ...event }) => {
+        const target = event.target || event.currentTarget;
+        const inputInfo = this._getInputInfo(target);
+        inputInfo.selectionEnd = event.nativeEvent.selection.end;
+        if (inputInfo.text === undefined) {
+            inputInfo.text = getProps(event._targetInst).value;
+        }
+
+        if (!isIOS) return;
+
+        if (inputInfo.onFocusRequireScroll) {
+            inputInfo.onFocusRequireScroll = false;
+            this._scrollToKeyboardRequest();
+        }
+    };
+
+    _onContentSizeChange = ({ ...event }) => {
+        const target = event.target || event.currentTarget;
+        const inputInfo = this._getInputInfo(target);
+        inputInfo.width = event.nativeEvent.contentSize.width;
+        inputInfo.height = event.nativeEvent.contentSize.height;
+        if (inputInfo.text === undefined) {
+            inputInfo.text = getProps(event._targetInst).value;
+        }
+        this._scrollToKeyboardRequest(true);
+    };
 }
 
 function getProps(targetNode) {
     return targetNode.memoizedProps || // >= react-native 0.49
         targetNode._currentElement.props; // <= react-native 0.48
+}
+
+function isArray(arr) {
+    return Object.prototype.toString.call(arr) === '[object Array]';
 }
 
 const styles = StyleSheet.create({
