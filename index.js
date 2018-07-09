@@ -194,20 +194,11 @@ export default class extends Component {
     }
 
     _addMultilineHandle(Component) {
-        const onChange = Component.props.onChange;
         const onSelectionChange = Component.props.onSelectionChange;
         const onContentSizeChange = Component.props.onContentSizeChange;
 
-        Component.props.onChange = (event) => {
-            this._onChange(event);
-            onChange &&
-                onChange(event);
-        };
-
         Component.props.onSelectionChange = ({ ...event }) => {
             if (isIOS) {
-                // 确保处理代码在 onChange 之后执行
-                // release 版本必须使用 requestAnimationFrame
                 requestAnimationFrame(() => this._onSelectionChange(event));
             } else {
                 setTimeout(() => this._onSelectionChange(event));
@@ -216,9 +207,6 @@ export default class extends Component {
                 onSelectionChange(event);
         };
 
-        // 使用防抖函数有两个目的
-        // - 确保 scrollToKeyboardRequest 在 onSelectionChange 之后执行
-        // - 短时间内不会重复执行 onContentSizeChange，因为当一次粘贴进许多行文本时，可能会连续触发多次 onContentSizeChange
         Component.props.onContentSizeChange = debounce(({ ...event }) => {
             this._onContentSizeChange(event);
             onContentSizeChange &&
@@ -241,10 +229,6 @@ export default class extends Component {
         });
     }
 
-    // 这里必须使用防抖函数
-    // 因为在真机上，当行数增多时，每调整一次 measureInputValue 的值，onContentSizeChange 都会触发多次。
-    // 如果不使用防抖函数，那么在 onContentSizeChange 第一次触发时，measureInputVisible 就会被设置为 false，导致无法获取正确的值。
-    // 但在模拟器上没有这个问题。
     _onContentSizeChangeMeasureInput = debounce(({ nativeEvent: event }) => {
         if (!this._measureCallback) return;
         this._measureCallback(event.contentSize.height);
@@ -274,7 +258,7 @@ export default class extends Component {
         const contentBottomOffset = Math.max(
             0,
             this.state.contentBottomOffset +
-            event.layoutMeasurement.height + // layoutMeasurement 可视区域的大小
+            event.layoutMeasurement.height +
             event.contentOffset.y -
             event.contentSize.height
         );
@@ -341,7 +325,6 @@ export default class extends Component {
         });
     };
 
-    // 这个方法是为了防止 ScrollView 在滑动结束后触发 TextInput 的 focus 事件
     _onTouchStart = ({ ...event }) => {
         const target = event.target || event.currentTarget;
         if (target === TextInput.State.currentlyFocusedField()) return false;
@@ -353,18 +336,7 @@ export default class extends Component {
         return uiViewClassName === 'RCTTextField' || uiViewClassName === 'RCTTextView';
     };
 
-    // 在单行 TextInput 中
-    // onFocus 在 keyboardWillShow 与 keyboardDidShow 之前触发
-    // 在多行 TextInput 中
-    // onFocus 在 keyboardDidShow 之前触发
-    // onFocus 在 keyboardWillShow 之后触发
     _onFocus = ({ ...event }) => {
-        // 当 onStartShouldSetResponderCapture 返回 true 时
-        // 被激活的 TextInput 无法使用 Keyboard.dismiss() 来收起键盘
-        // TextInput.State.currentlyFocusedField() 也无法获取当前焦点ID
-        // 原因可能是系统并未判定 TextInput 获取焦点，这可能是一个 bug
-        // 通常需要在 onStartShouldSetResponderCapture 返回 false 的情况下再点击一次 TextInput 才能恢复正常
-        // 所以这里手动再设置一次焦点
         const target = event.target || event.currentTarget;
         TextInput.State.focusTextInput(target);
 
@@ -392,17 +364,6 @@ export default class extends Component {
         }
     };
 
-    // onChange 在 onContentSizeChange 之前触发
-    // onChange 在 onSelectionChange 之后触发
-    _onChange = ({ ...event }) => {
-        const target = event.target || event.currentTarget;
-        const inputInfo = this._getInputInfo(target);
-        inputInfo.text = event.nativeEvent.text;
-    }
-
-    // onSelectionChange 在 keyboardDidShow 之前触发
-    // onSelectionChange 在 onContentSizeChange 之前触发
-    // onSelectionChange 在 onFocus 之后触发
     _onSelectionChange = ({ ...event }) => {
         const target = event.target || event.currentTarget;
         const inputInfo = this._getInputInfo(target);
