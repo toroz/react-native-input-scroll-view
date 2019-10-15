@@ -107,7 +107,7 @@ export default class extends Component {
             children,
             useAnimatedScrollView,
             useKeyboardAvoidingView,
-            ...otherProps,
+            ...otherProps
         } = this.props;
 
         const {
